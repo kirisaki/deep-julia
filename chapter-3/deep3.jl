@@ -2,7 +2,9 @@ using LinearAlgebra
 using MLDatasets.MNIST
 using ImageCore
 using Plots
-using StatsBase
+using Random
+using PyCall
+@pyimport pickle
 
 function h(v)
     map(x -> 1.0 / (1.0 + exp(-x)), v)
@@ -14,17 +16,20 @@ function σ(a)
     exp_a / sum(exp_a)
 end
 
-function init_network()
-    network = Dict()
-    network["W1"] = [0.1 0.3 0.5; 0.2 0.4 0.6]
-    network["b1"] = [0.1 0.2 0.3]
-    network["W2"] = [0.1 0.4; 0.2 0.5; 0.3 0.6]
-    network["b2"] = [0.1 0.2]
-    network["W3"] = [0.1 0.3; 0.2 0.4]
-    network["b3"] = [0.1 0.2]
-
-    return network
+function init_network()::Matrix{Float64}
+    rand(Float64, (2,3))
 end
+
+function loss(
+    x::Matrix{Float64},
+    t::Matrix{Float64},
+    W::Matrix{Float64},
+    )::Float64
+    z = x * W
+    y = σ(z)
+    cross_entropy_error(y, t)
+end
+
 
 function forward(network, x)
     W1, W2, W3 = network["W1"], network["W2"], network["W3"]
@@ -37,46 +42,73 @@ function forward(network, x)
     a3 = z2 * W3 + b3
 end
 
-network = init_network()
-x = [1.0 0.5]
-forward(network, x)
-data, labels = MNIST.testdata(UInt8)
-datasets = collect(zip(eachslice(data, dims=3), labels))
-datasets0 = collect(zip(map(arr -> collect(reshape(arr, (28 * 28))), eachslice(data, dims=3)), labels))
-StatsBase.sample(datasets, 10)
-d, _ =first(datasets0)
-size(d)
-plot(MNIST.convert2image(d))
-
-function cross_entropy_error(y::AbstractArray{T, N}, t::AbstractArray{T, N})::AbstractFloat where{T <: Number, N}
-    - sum(float.(t) .* log.(float.(y))) / length(t)
+function prepare_testdata()
+    data, labels = MNIST.testdata()
+    collect(zip(map(arr -> collect(reshape(arr, (1, 28 * 28))), eachslice(data, dims=3)), labels))
 end
 
-cross_entropy_error(d, d)
+function cross_entropy_error(
+    y::AbstractArray{T, N}, 
+    t::AbstractArray{T, N},
+    )::AbstractFloat where{T <: Number, N}
+    - sum(float.(t) .* log.(float.(y)))
+end
 
-function numerical_gradient(f::Function, xs::AbstractVector{T}; h=1e-6)::AbstractVector{T} where{T <: Number}
+
+function numerical_gradient(
+    f::Function,
+    xs::AbstractArray{T, N};
+    h=1e-4::T,
+    )::AbstractArray{T, N} where{T <: Number, N}
     grad = zeros(size(xs))
     for (i, x) in enumerate(xs)
-        xs0 = xs
-        tmp_val = xs0[i]
-        xs0[i] = tmp_val + h
-        fxh1 = f(xs0)
-        xs0[i] = tmp_val - h
-        fxh2 = f(xs0)
+        xs[i] = x + h
+        fxh1 = f(xs)
+        xs[i] = x - h
+        fxh2 = f(xs)
         grad[i] = (fxh1 - fxh2) / (2h)
+        xs[i] = x
     end
     grad
 end
 
-f(xs) = xs[1]^2 + xs[2]^2
-
-numerical_gradient(f, [.0, .0])
-
-function gradient_descent(f::Function, init_x::AbstractVector; learning_rate=0.01, steps=100)
+function gradient_descent(
+    f::Function,
+    init_x::AbstractArray{T, N};
+    learning_rate=0.01::T,
+    steps=100::UInt128
+    )::AbstractArray{T, N} where{T <: Number, N}
     x = init_x
     for _ = 1:steps
-        x -= learning_rate .* numerical_gradient(f, x)
+        x -= learning_rate * numerical_gradient(f, x)
     end
     x
 end
-gradient_descent(f, [-3.0, 4.0], learning_rate=.001, steps=100)
+
+function make_predict(fname="./sample_weight.pkl")
+    f = pybuiltin("open")(fname, "rb")
+    network = pickle.load(f)
+    f.close()
+    W₁ ,W₂, W₃ = network["W1"], network["W2"], network["W3"]
+    b₁ ,b₂, b₃ = network["b1"], network["b2"], network["b3"]
+    function (x::AbstractArray)
+        a₁ = x * W₁ + transpose(b₁)
+        z₁ = h(a₁)
+        a₂ = z₁ * W₂ + transpose(b₂)
+        z₂ = h(a₂)
+        a₃ = z₂ * W₃ + transpose(b₃)
+        σ(a₃)
+    end
+end
+
+function bench_01()
+    predict = make_predict()
+    data = prepare_testdata()
+    count = 0
+    for (x, l) in data
+        if argmax(predict(x))[2] - 1 == l
+            count += 1
+        end
+    end
+    count / length(data)
+end
