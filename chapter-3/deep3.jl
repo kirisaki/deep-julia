@@ -42,9 +42,12 @@ function forward(network, x)
     a3 = z2 * W3 + b3
 end
 
-function prepare_testdata()
+function prepare_testdata(;batch=1)
     data, labels = MNIST.testdata()
-    collect(zip(map(arr -> collect(reshape(arr, (1, 28 * 28))), eachslice(data, dims=3)), labels))
+    batch_num = div(length(labels), batch)
+    data0 = eachslice(reshape(data, (28 * 28 * batch, batch_num)), dims=2)
+    labels0 = eachslice(transpose(reshape(labels, (batch, batch_num))), dims=1)
+    collect(zip(data0, labels0))
 end
 
 function cross_entropy_error(
@@ -92,23 +95,38 @@ function make_predict(fname="./sample_weight.pkl")
     W₁ ,W₂, W₃ = network["W1"], network["W2"], network["W3"]
     b₁ ,b₂, b₃ = network["b1"], network["b2"], network["b3"]
     function (x::AbstractArray)
-        a₁ = x * W₁ + transpose(b₁)
+        a₁ = x * W₁ .+ transpose(b₁)
         z₁ = h(a₁)
-        a₂ = z₁ * W₂ + transpose(b₂)
+        a₂ = z₁ * W₂ .+ transpose(b₂)
         z₂ = h(a₂)
-        a₃ = z₂ * W₃ + transpose(b₃)
+        a₃ = z₂ * W₃ .+ transpose(b₃)
         σ(a₃)
     end
 end
 
-function bench_01()
+function bench01()
     predict = make_predict()
     data = prepare_testdata()
     count = 0
     for (x, l) in data
-        if argmax(predict(x))[2] - 1 == l
+        if argmax(predict(x))[2] - 1 == l[1]
             count += 1
         end
     end
     count / length(data)
+end
+bench01()
+
+function bench01_batch(;batch=100)
+    predict = make_predict()
+    data = prepare_testdata(batch=batch)
+    count = 0
+    for (xs, ls) in data
+        for (p, l) in zip(eachslice(predict(transpose(reshape(xs, (28 * 28, batch)))), dims=1), ls)
+            if argmax(p) - 1 == l
+                count += 1
+            end
+        end
+    end
+    count / (length(data) * batch)
 end
